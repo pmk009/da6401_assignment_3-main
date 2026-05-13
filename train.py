@@ -222,7 +222,67 @@ def evaluate_bleu(
     Returns:
         bleu_score : Corpus-level BLEU (float, range 0–100).
     """
-    from torchtext.data.metrics import bleu_score as compute_bleu
+    import math
+    from collections import Counter
+
+    def _ngrams(tokens, n):
+        """Extract n-grams from a token list."""
+        return [tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)]
+
+    def _corpus_bleu(candidates, references_list, max_n=4):
+        """
+        Compute corpus-level BLEU score (BLEU-4 by default).
+
+        Args:
+            candidates      : list of predicted token lists, e.g. [['a','b'], ...]
+            references_list : list of reference lists, e.g. [[['a','b']], ...]
+                              (each entry is a list of one or more reference token lists)
+            max_n           : maximum n-gram order (default 4).
+
+        Returns:
+            BLEU score in [0, 1].
+        """
+        clipped_counts = [0] * max_n
+        total_counts   = [0] * max_n
+        bp_c = 0  # candidate length
+        bp_r = 0  # effective reference length
+
+        for cand, refs in zip(candidates, references_list):
+            bp_c += len(cand)
+            # closest reference length
+            ref_lens = [len(ref) for ref in refs]
+            closest = min(ref_lens, key=lambda r: (abs(r - len(cand)), r))
+            bp_r += closest
+
+            for n in range(1, max_n + 1):
+                cand_ngrams = Counter(_ngrams(cand, n))
+                # max counts across all references
+                max_ref_ngrams = Counter()
+                for ref in refs:
+                    ref_ngrams = Counter(_ngrams(ref, n))
+                    for ng, cnt in ref_ngrams.items():
+                        max_ref_ngrams[ng] = max(max_ref_ngrams[ng], cnt)
+
+                clipped = {ng: min(cnt, max_ref_ngrams[ng])
+                           for ng, cnt in cand_ngrams.items()}
+                clipped_counts[n - 1] += sum(clipped.values())
+                total_counts[n - 1]   += sum(cand_ngrams.values())
+
+        # compute modified precisions (log domain)
+        log_precision = 0.0
+        for n in range(max_n):
+            if total_counts[n] == 0 or clipped_counts[n] == 0:
+                return 0.0  # if any n-gram precision is zero, BLEU is zero
+            log_precision += math.log(clipped_counts[n] / total_counts[n])
+        log_precision /= max_n
+
+        # brevity penalty
+        if bp_c >= bp_r:
+            bp = 1.0
+        else:
+            bp = math.exp(1 - bp_r / bp_c)
+
+        return bp * math.exp(log_precision)
 
     model.eval()
     all_refs  = []
@@ -253,7 +313,7 @@ def evaluate_bleu(
                 all_preds.append(pred_words)
                 all_refs.append([ref_words])  # list of references per sentence
 
-    bleu = compute_bleu(all_preds, all_refs) * 100.0
+    bleu = _corpus_bleu(all_preds, all_refs) * 100.0
     return bleu
 
 
