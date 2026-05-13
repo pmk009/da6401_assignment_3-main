@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pth
+.env
+venv/
+node_modules/
+.vscode/
+.idea/
+.DS_Store
+wandb/
+data/images/
+data/annotations/

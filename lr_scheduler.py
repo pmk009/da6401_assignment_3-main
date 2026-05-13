@@ -1,5 +1,4 @@
-"""
-Noam Learning Rate Scheduler
+"""Noam Learning Rate Scheduler
 Reference: "Attention Is All You Need" (Vaswani et al., 2017)
            https://arxiv.org/abs/1706.03762
 
@@ -12,13 +11,8 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import LRScheduler
 
 
-# ─────────────────────────────────────────────
-# TODO: Implement the NoamScheduler class below
-# ─────────────────────────────────────────────
-
 class NoamScheduler(LRScheduler):
-    """
-    Noam learning rate scheduler as described in "Attention Is All You Need".
+    """Noam learning rate scheduler as described in "Attention Is All You Need".
 
     Applies a warm-up phase where LR increases linearly, followed by
     a decay phase where LR decreases proportional to the inverse square
@@ -38,41 +32,32 @@ class NoamScheduler(LRScheduler):
         warmup_steps: int,
         last_epoch: int = -1,
     ) -> None:
-        # TODO: Store d_model and warmup_steps as instance attributes
-        # TODO: Call the parent __init__
-        raise NotImplementedError
+        self.d_model      = d_model
+        self.warmup_steps = warmup_steps
+        super().__init__(optimizer, last_epoch)
 
-    # ------------------------------------------------------------------
     def _get_lr_scale(self) -> float:
-        """
-        Compute the Noam scaling factor for the current step.
+        """Compute the Noam scaling factor for the current step.
 
         Returns:
             float: The scalar multiplier applied to the base learning rate.
-
-        Hint:
-            step = self.last_epoch + 1            # avoid step=0
-            scale = d_model^(-0.5) * min(step^(-0.5), step * warmup_steps^(-1.5))
         """
-        # TODO: Implement and return the Noam scale factor
-        raise NotImplementedError
+        step = self.last_epoch + 1  # avoid step=0
+        return self.d_model ** (-0.5) * min(
+            step ** (-0.5),
+            step * self.warmup_steps ** (-1.5),
+        )
 
-    # ------------------------------------------------------------------
     def get_lr(self) -> list[float]:
-        """
-        Compute learning rates for every param group.
+        """Compute learning rates for every param group.
 
         Called internally by PyTorch's scheduler machinery each step.
 
         Returns:
             list[float]: New learning rate for each param group in the optimizer.
-
-        Hint:
-            Multiply each group's `base_lr` by the value from `_get_lr_scale()`.
-            Access base learning rates via `self.base_lrs`.
         """
-        # TODO: Return a list of scaled LRs, one per param group
-        raise NotImplementedError
+        scale = self._get_lr_scale()
+        return [base_lr * scale for base_lr in self.base_lrs]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -84,8 +69,7 @@ def get_lr_history(
     warmup_steps: int,
     total_steps: int,
 ) -> list[float]:
-    """
-    Simulate the LR trajectory of NoamScheduler for `total_steps` steps.
+    """Simulate the LR trajectory of NoamScheduler for `total_steps` steps.
 
     Args:
         d_model      (int): Model dimensionality.
@@ -109,7 +93,7 @@ def get_lr_history(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Quick visual check — run:  python noam_lr_scheduler.py
+# Quick visual check — run:  python lr_scheduler.py
 # ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
