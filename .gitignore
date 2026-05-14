@@ -1,6 +1,10 @@
 __pycache__/
 *.pyc
 *.pth
+*.pt
+*.sh
+test_infer.py
+run_exp2_3.py
 .env
 venv/
 node_modules/

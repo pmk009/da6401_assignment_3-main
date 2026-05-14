@@ -140,7 +140,8 @@ def run_epoch(
             # gradient clipping to stabilize training
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
-            scheduler.step()
+            if scheduler is not None:
+                scheduler.step()
 
         # count non-pad tokens
         n_tokens = (tgt_output != PAD_IDX).sum().item()
@@ -422,6 +423,21 @@ def run_training_experiment() -> None:
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoints')
     parser.add_argument('--wandb_project',  type=str, default='da6401-a3')
     parser.add_argument('--run_name',       type=str, default='')
+    # ── experiment flags ──
+    parser.add_argument('--use_scaling',    type=int, default=1,
+                        help='1=with sqrt(dk) scaling, 0=without (Exp 2.2)')
+    parser.add_argument('--pos_encoding',  type=str, default='sinusoidal',
+                        choices=['sinusoidal', 'learned'],
+                        help='Positional encoding type (Exp 2.4)')
+    parser.add_argument('--scheduler_type', type=str, default='noam',
+                        choices=['noam', 'fixed'],
+                        help='LR scheduler: noam or fixed (Exp 2.1)')
+    parser.add_argument('--fixed_lr',      type=float, default=1e-4,
+                        help='Constant LR when scheduler_type=fixed')
+    parser.add_argument('--log_grad_norms', type=int, default=0,
+                        help='1=log Q/K gradient norms each step (Exp 2.2)')
+    parser.add_argument('--log_confidence', type=int, default=0,
+                        help='1=log prediction confidence each step (Exp 2.5)')
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -452,17 +468,27 @@ def run_training_experiment() -> None:
         d_ff=args.d_ff,
         dropout=args.dropout,
         pad_idx=PAD_IDX,
+        use_scaling=bool(args.use_scaling),
+        pos_encoding=args.pos_encoding,
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  Model params: {total_params:,}")
 
     # ── 4. optimizer & scheduler ──
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=1.0,
-        betas=(0.9, 0.98), eps=1e-9,
-    )
-    scheduler = NoamScheduler(optimizer, d_model=args.d_model, warmup_steps=args.warmup_steps)
+    if args.scheduler_type == 'noam':
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=1.0,
+            betas=(0.9, 0.98), eps=1e-9,
+        )
+        scheduler = NoamScheduler(optimizer, d_model=args.d_model, warmup_steps=args.warmup_steps)
+    else:
+        # Fixed LR (Exp 2.1)
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=args.fixed_lr,
+            betas=(0.9, 0.98), eps=1e-9,
+        )
+        scheduler = None
 
     # ── 5. loss ──
     loss_fn = LabelSmoothingLoss(len(tgt_vocab), PAD_IDX, smoothing=args.smoothing)
@@ -476,6 +502,8 @@ def run_training_experiment() -> None:
         'smoothing': args.smoothing, 'min_freq': args.min_freq,
         'src_vocab_size': len(src_vocab), 'tgt_vocab_size': len(tgt_vocab),
         'total_params': total_params,
+        'use_scaling': args.use_scaling, 'pos_encoding': args.pos_encoding,
+        'scheduler_type': args.scheduler_type, 'fixed_lr': args.fixed_lr,
     }
 
     wandb.init(
@@ -489,6 +517,7 @@ def run_training_experiment() -> None:
     best_val_loss = float('inf')
 
     # ── 7. training loop ──
+    global_step = 0
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
 
@@ -498,23 +527,63 @@ def run_training_experiment() -> None:
         current_lr = optimizer.param_groups[0]['lr']
         print(f"  Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | LR: {current_lr:.6e}")
 
-        wandb.log({
+        # ── per-epoch logging ──
+        log_dict = {
             'epoch': epoch,
             'train/loss': train_loss,
             'val/loss':   val_loss,
             'lr': current_lr,
-        })
+        }
+
+        # Exp 2.2 — gradient norms of Q and K weight matrices
+        if args.log_grad_norms:
+            q_norms, k_norms = [], []
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    if 'W_q.weight' in name:
+                        q_norms.append(param.grad.norm().item())
+                    elif 'W_k.weight' in name:
+                        k_norms.append(param.grad.norm().item())
+            if q_norms:
+                log_dict['grad_norm/W_q'] = sum(q_norms) / len(q_norms)
+            if k_norms:
+                log_dict['grad_norm/W_k'] = sum(k_norms) / len(k_norms)
+
+        # Exp 2.5 — prediction confidence (softmax prob of correct token)
+        if args.log_confidence:
+            model.eval()
+            with torch.no_grad():
+                conf_total, conf_count = 0.0, 0
+                for src, tgt in val_loader:
+                    src, tgt = src.to(device), tgt.to(device)
+                    tgt_input, tgt_output = tgt[:, :-1], tgt[:, 1:]
+                    src_mask = make_src_mask(src, PAD_IDX).to(device)
+                    tgt_mask = make_tgt_mask(tgt_input, PAD_IDX).to(device)
+                    logits = model(src, tgt_input, src_mask, tgt_mask)
+                    probs = torch.softmax(logits, dim=-1)
+                    mask = tgt_output != PAD_IDX
+                    correct_probs = probs.gather(2, tgt_output.unsqueeze(-1)).squeeze(-1)
+                    conf_total += (correct_probs * mask).sum().item()
+                    conf_count += mask.sum().item()
+                    break  # sample one batch for speed
+                if conf_count > 0:
+                    log_dict['prediction_confidence'] = conf_total / conf_count
+            model.train()
+
+        wandb.log(log_dict)
 
         # save best checkpoint
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_path = os.path.join(args.checkpoint_dir, 'best_model.pt')
-            save_checkpoint(model, optimizer, scheduler, epoch, best_path)
+            save_checkpoint(model, optimizer, scheduler if scheduler else NoamScheduler(
+                torch.optim.Adam([torch.zeros(1)], lr=1.0), 256, 4000), epoch, best_path)
             print(f"  Saved best checkpoint -> {best_path}")
 
         # save periodic checkpoint
         ckpt_path = os.path.join(args.checkpoint_dir, 'checkpoint.pt')
-        save_checkpoint(model, optimizer, scheduler, epoch, ckpt_path)
+        save_checkpoint(model, optimizer, scheduler if scheduler else NoamScheduler(
+            torch.optim.Adam([torch.zeros(1)], lr=1.0), 256, 4000), epoch, ckpt_path)
 
     # ── 8. final BLEU evaluation ──
     print("\nLoading best checkpoint for final evaluation...")

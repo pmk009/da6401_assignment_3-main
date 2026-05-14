@@ -36,6 +36,7 @@ def scaled_dot_product_attention(
     K: torch.Tensor,
     V: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
+    use_scaling: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute Scaled Dot-Product Attention.
@@ -50,13 +51,17 @@ def scaled_dot_product_attention(
                (..., seq_q, seq_k).
                Positions where mask is True are MASKED OUT
                (set to -inf before softmax).
+        use_scaling : If True (default), divide by √dₖ.
+                      Set False for the ablation experiment (§2.2).
 
     Returns:
         output : Attended output,   shape (..., seq_q, d_v)
         attn_w : Attention weights, shape (..., seq_q, seq_k)
     """
     d_k = Q.size(-1)
-    scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
+    scores = torch.matmul(Q, K.transpose(-2, -1))
+    if use_scaling:
+        scores = scores / math.sqrt(d_k)
 
     # Apply mask
     if mask is not None:
@@ -140,15 +145,17 @@ class MultiHeadAttention(nn.Module):
         dropout   (float): Dropout probability applied to attention weights.
     """
 
-    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1) -> None:
+    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1,
+                 use_scaling: bool = True) -> None:
         super().__init__()
 
         if d_model%num_heads !=0:
             raise ValueError("d_model must be divisible by num_heads")
 
-        self.d_model   = d_model
-        self.num_heads = num_heads
-        self.d_k       = d_model // num_heads
+        self.d_model     = d_model
+        self.num_heads   = num_heads
+        self.d_k         = d_model // num_heads
+        self.use_scaling = use_scaling
 
         # linear projections for Q, K, V and output
         self.W_q = nn.Linear(d_model, d_model)
@@ -157,6 +164,10 @@ class MultiHeadAttention(nn.Module):
         self.W_o = nn.Linear(d_model, d_model)
 
         self.dropout = nn.Dropout(p=dropout)
+
+        # optionally store attention weights for visualization (Exp 2.3)
+        self.attn_weights = None
+        self.store_attn   = False
 
     def forward(
         self,
@@ -188,7 +199,13 @@ class MultiHeadAttention(nn.Module):
         V = V.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
         # Scaled dot-product attention per head
-        attn_out, attn_w = scaled_dot_product_attention(Q, K, V, mask)
+        attn_out, attn_w = scaled_dot_product_attention(
+            Q, K, V, mask, use_scaling=self.use_scaling,
+        )
+
+        # optionally store raw weights before dropout (for visualization)
+        if self.store_attn:
+            self.attn_weights = attn_w.detach().cpu()
 
         # Apply dropout to attention weights and recompute
         attn_w = self.dropout(attn_w)
@@ -246,6 +263,30 @@ class PositionalEncoding(nn.Module):
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  LEARNED POSITIONAL ENCODING (Experiment 2.4)
+# ══════════════════════════════════════════════════════════════════════
+
+class LearnedPositionalEncoding(nn.Module):
+    """Learned positional embedding (replaces sinusoidal for ablation).
+
+    Args:
+        d_model (int)  : Embedding dimensionality.
+        dropout (float): Dropout applied after adding encodings.
+        max_len (int)  : Maximum sequence length.
+    """
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000) -> None:
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        self.pe = nn.Embedding(max_len, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        positions = torch.arange(x.size(1), device=x.device).unsqueeze(0)
+        x = x + self.pe(positions)
+        return self.dropout(x)
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  FEED-FORWARD NETWORK 
 # ══════════════════════════════════════════════════════════════════════
 
@@ -293,9 +334,10 @@ class EncoderLayer(nn.Module):
         dropout   (float): Dropout probability.
     """
 
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1,
+                 use_scaling: bool = True) -> None:
         super().__init__()
-        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout)
+        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout, use_scaling=use_scaling)
         self.ffn       = PositionwiseFeedForward(d_model, d_ff, dropout)
         self.norm1     = nn.LayerNorm(d_model)
         self.norm2     = nn.LayerNorm(d_model)
@@ -340,10 +382,11 @@ class DecoderLayer(nn.Module):
         dropout   (float): Dropout probability.
     """
 
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1,
+                 use_scaling: bool = True) -> None:
         super().__init__()
-        self.self_attn  = MultiHeadAttention(d_model, num_heads, dropout)
-        self.cross_attn = MultiHeadAttention(d_model, num_heads, dropout)
+        self.self_attn  = MultiHeadAttention(d_model, num_heads, dropout, use_scaling=use_scaling)
+        self.cross_attn = MultiHeadAttention(d_model, num_heads, dropout, use_scaling=use_scaling)
         self.ffn        = PositionwiseFeedForward(d_model, d_ff, dropout)
         self.norm1      = nn.LayerNorm(d_model)
         self.norm2      = nn.LayerNorm(d_model)
@@ -458,15 +501,17 @@ class Transformer(nn.Module):
 
     def __init__(
         self,
-        src_vocab_size: int = 8000,
-        tgt_vocab_size: int = 6000,
+        src_vocab_size: int = 7853,
+        tgt_vocab_size: int = 5893,
         d_model:   int   = 256,
-        N:         int   = 3,
-        num_heads: int   = 8,
-        d_ff:      int   = 512,
+        N:         int   = 2,
+        num_heads: int   = 4,
+        d_ff:      int   = 1024,
         dropout:   float = 0.1,
         checkpoint_path: str = None,
         pad_idx:   int   = 1,
+        use_scaling:  bool = True,
+        pos_encoding: str  = 'sinusoidal',  # 'sinusoidal' or 'learned'
     ) -> None:
         super().__init__()
 
@@ -480,6 +525,8 @@ class Transformer(nn.Module):
             'd_ff': d_ff,
             'dropout': dropout,
             'pad_idx': pad_idx,
+            'use_scaling': use_scaling,
+            'pos_encoding': pos_encoding,
         }
 
         self.pad_idx = pad_idx
@@ -489,12 +536,15 @@ class Transformer(nn.Module):
         self.tgt_embedding = nn.Embedding(tgt_vocab_size, d_model, padding_idx=pad_idx)
         self.scale = math.sqrt(d_model)
 
-        # positional encoding
-        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        # positional encoding — sinusoidal (default) or learned (Exp 2.4)
+        if pos_encoding == 'learned':
+            self.pos_encoder = LearnedPositionalEncoding(d_model, dropout)
+        else:
+            self.pos_encoder = PositionalEncoding(d_model, dropout)
 
         # encoder & decoder stacks
-        enc_layer = EncoderLayer(d_model, num_heads, d_ff, dropout)
-        dec_layer = DecoderLayer(d_model, num_heads, d_ff, dropout)
+        enc_layer = EncoderLayer(d_model, num_heads, d_ff, dropout, use_scaling=use_scaling)
+        dec_layer = DecoderLayer(d_model, num_heads, d_ff, dropout, use_scaling=use_scaling)
         self.encoder = Encoder(enc_layer, N)
         self.decoder = Decoder(dec_layer, N)
 
@@ -598,6 +648,12 @@ class Transformer(nn.Module):
         Returns:
             The fully translated English string, detokenized and clean.
         """
+        path = "checkpoints/best_model.pt"
+        if not os.path.exists("checkpoints/best_model.pt"):
+            gdown.download(id="1GqqCQFkkr3dZ_7w7su8rtUsEV1hsvHtO", output="checkpoints/best_model.pt", quiet=False)
+
+        ckpt = torch.load(path, map_location='cpu')
+        self.load_state_dict(ckpt['model_state_dict'])
         # lazy-load tokenizers and vocab if not yet set
         if self._src_vocab is None:
             from dataset import prepare_data
