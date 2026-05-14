@@ -554,15 +554,19 @@ class Transformer(nn.Module):
         # Xavier initialization (as recommended in the paper)
         self._init_weights()
 
-        # load checkpoint if provided (download from Google Drive via gdown)
-        if checkpoint_path is not None:
+        if checkpoint_path is None:
+            path = "checkpoints/best_weights.pt"
+            os.makedirs("checkpoints", exist_ok=True)
+            if not os.path.exists(path):
+                gdown.download(id="16xHDvEC3nkgFjsBIEb4I-o33Ud9qhskh", output=path, quiet=False)
+            weights = torch.load(path, map_location='cpu')
+            self.load_state_dict(weights)
+        else:
             if not os.path.exists(checkpoint_path):
-                # download from drive — replace the id with your actual drive file id
-                gdown.download(id="<.pth drive id>", output=checkpoint_path, quiet=False)
-            ckpt = torch.load(checkpoint_path, map_location='cpu')
-            self.load_state_dict(ckpt['model_state_dict'])
+                gdown.download(id="16xHDvEC3nkgFjsBIEb4I-o33Ud9qhskh", output=checkpoint_path, quiet=False)
+            weights = torch.load(checkpoint_path, map_location='cpu')
+            self.load_state_dict(weights)
 
-        # store tokenizers and vocab for infer()
         self._src_vocab     = None
         self._tgt_vocab     = None
         self._src_tokenizer = None
@@ -648,14 +652,7 @@ class Transformer(nn.Module):
         Returns:
             The fully translated English string, detokenized and clean.
         """
-        path = "checkpoints/best_weights.pt"
-        os.makedirs("checkpoints", exist_ok=True)
-        if not os.path.exists(path):
-            gdown.download(id="16xHDvEC3nkgFjsBIEb4I-o33Ud9qhskh", output=path, quiet=False)
-
-        weights = torch.load(path, map_location='cpu')
-        self.load_state_dict(weights)
-        # lazy-load tokenizers and vocab if not yet set
+        
         if self._src_vocab is None:
             from dataset import prepare_data
             _, _, _, src_vocab, tgt_vocab, de_tok, en_tok = prepare_data()
