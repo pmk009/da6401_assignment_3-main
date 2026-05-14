@@ -651,7 +651,7 @@ class Transformer(nn.Module):
         path = "checkpoints/best_model.pt"
         os.makedirs("checkpoints", exist_ok=True)
         if not os.path.exists("checkpoints/best_model.pt"):
-            gdown.download(id="1GqqCQFkkr3dZ_7w7su8rtUsEV1hsvHtO", output="checkpoints/best_model.pt", quiet=False)
+            gdown.download(id="1EON4bY2gaUOKrXIS3hNlVMIPDqPCiErf", output="checkpoints/best_model.pt", quiet=False)
 
         ckpt = torch.load(path, map_location='cpu')
         self.load_state_dict(ckpt['model_state_dict'])
