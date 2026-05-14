@@ -648,13 +648,13 @@ class Transformer(nn.Module):
         Returns:
             The fully translated English string, detokenized and clean.
         """
-        path = "checkpoints/best_model.pt"
+        path = "checkpoints/best_weights.pt"
         os.makedirs("checkpoints", exist_ok=True)
-        if not os.path.exists("checkpoints/best_model.pt"):
-            gdown.download(id="1EON4bY2gaUOKrXIS3hNlVMIPDqPCiErf", output="checkpoints/best_model.pt", quiet=False)
+        if not os.path.exists(path):
+            gdown.download(id="16xHDvEC3nkgFjsBIEb4I-o33Ud9qhskh", output=path, quiet=False)
 
-        ckpt = torch.load(path, map_location='cpu')
-        self.load_state_dict(ckpt['model_state_dict'])
+        weights = torch.load(path, map_location='cpu')
+        self.load_state_dict(weights)
         # lazy-load tokenizers and vocab if not yet set
         if self._src_vocab is None:
             from dataset import prepare_data
