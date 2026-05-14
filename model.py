@@ -649,6 +649,7 @@ class Transformer(nn.Module):
             The fully translated English string, detokenized and clean.
         """
         path = "checkpoints/best_model.pt"
+        os.makedirs("checkpoints", exist_ok=True)
         if not os.path.exists("checkpoints/best_model.pt"):
             gdown.download(id="1GqqCQFkkr3dZ_7w7su8rtUsEV1hsvHtO", output="checkpoints/best_model.pt", quiet=False)
 
