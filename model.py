@@ -654,8 +654,24 @@ class Transformer(nn.Module):
         """
         
         if self._src_vocab is None:
-            from dataset import prepare_data
-            _, _, _, src_vocab, tgt_vocab, de_tok, en_tok = prepare_data()
+            import spacy
+            from datasets import load_dataset
+            from dataset import Vocabulary
+
+            de_tok = spacy.blank('de')
+            en_tok = spacy.blank('en')
+
+            raw = load_dataset('bentrevett/multi30k')
+            train_pairs = [(ex['de'], ex['en']) for ex in raw['train']]
+
+            src_lists = [[t.text.lower() for t in de_tok(p[0])] for p in train_pairs]
+            tgt_lists = [[t.text.lower() for t in en_tok(p[1])] for p in train_pairs]
+
+            src_vocab = Vocabulary()
+            tgt_vocab = Vocabulary()
+            src_vocab.build(src_lists, min_freq=2)
+            tgt_vocab.build(tgt_lists, min_freq=2)
+
             self._src_vocab     = src_vocab
             self._tgt_vocab     = tgt_vocab
             self._src_tokenizer = de_tok
