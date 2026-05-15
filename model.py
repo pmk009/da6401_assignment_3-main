@@ -576,12 +576,12 @@ class Transformer(nn.Module):
             path = "checkpoints/best_weights.pt"
             os.makedirs("checkpoints", exist_ok=True)
             if not os.path.exists(path):
-                gdown.download(id="16xHDvEC3nkgFjsBIEb4I-o33Ud9qhskh", output=path, quiet=False)
+                gdown.download(id="1ADOzGAuGw7IOWg-bUmvz_MkOaPeljau1", output=path, quiet=False)
             weights = torch.load(path, map_location='cpu')
             self.load_state_dict(weights)
         else:
             if not os.path.exists(checkpoint_path):
-                gdown.download(id="1It9-xtQFPtO11D7LREN-E4xj_LyrEojy", output=checkpoint_path, quiet=False)
+                gdown.download(id="1ADOzGAuGw7IOWg-bUmvz_MkOaPeljau1", output=checkpoint_path, quiet=False)
             weights = torch.load(checkpoint_path, map_location='cpu')
             self.load_state_dict(weights)
 
