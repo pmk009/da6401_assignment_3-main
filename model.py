@@ -554,6 +554,24 @@ class Transformer(nn.Module):
         # Xavier initialization (as recommended in the paper)
         self._init_weights()
 
+        import spacy
+        from datasets import load_dataset
+        from dataset import Vocabulary
+
+        self._src_tokenizer = spacy.blank('de')
+        en_tok = spacy.blank('en')
+
+        raw = load_dataset('bentrevett/multi30k')
+        train_pairs = [(ex['de'], ex['en']) for ex in raw['train']]
+
+        src_lists = [[t.text.lower() for t in self._src_tokenizer(p[0])] for p in train_pairs]
+        tgt_lists = [[t.text.lower() for t in en_tok(p[1])] for p in train_pairs]
+
+        self._src_vocab = Vocabulary()
+        self._tgt_vocab = Vocabulary()
+        self._src_vocab.build(src_lists, min_freq=2)
+        self._tgt_vocab.build(tgt_lists, min_freq=2)
+
         if checkpoint_path is None:
             path = "checkpoints/best_weights.pt"
             os.makedirs("checkpoints", exist_ok=True)
@@ -566,10 +584,6 @@ class Transformer(nn.Module):
                 gdown.download(id="16xHDvEC3nkgFjsBIEb4I-o33Ud9qhskh", output=checkpoint_path, quiet=False)
             weights = torch.load(checkpoint_path, map_location='cpu')
             self.load_state_dict(weights)
-
-        self._src_vocab     = None
-        self._tgt_vocab     = None
-        self._src_tokenizer = None
 
     def _init_weights(self):
         """Xavier uniform initialization for all linear/embedding layers."""
@@ -653,29 +667,6 @@ class Transformer(nn.Module):
             The fully translated English string, detokenized and clean.
         """
         
-        if self._src_vocab is None:
-            import spacy
-            from datasets import load_dataset
-            from dataset import Vocabulary
-
-            de_tok = spacy.blank('de')
-            en_tok = spacy.blank('en')
-
-            raw = load_dataset('bentrevett/multi30k')
-            train_pairs = [(ex['de'], ex['en']) for ex in raw['train']]
-
-            src_lists = [[t.text.lower() for t in de_tok(p[0])] for p in train_pairs]
-            tgt_lists = [[t.text.lower() for t in en_tok(p[1])] for p in train_pairs]
-
-            src_vocab = Vocabulary()
-            tgt_vocab = Vocabulary()
-            src_vocab.build(src_lists, min_freq=2)
-            tgt_vocab.build(tgt_lists, min_freq=2)
-
-            self._src_vocab     = src_vocab
-            self._tgt_vocab     = tgt_vocab
-            self._src_tokenizer = de_tok
-
         device = next(self.parameters()).device
 
         # tokenize source sentence
