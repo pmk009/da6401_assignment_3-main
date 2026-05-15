@@ -581,7 +581,7 @@ class Transformer(nn.Module):
             self.load_state_dict(weights)
         else:
             if not os.path.exists(checkpoint_path):
-                gdown.download(id="16xHDvEC3nkgFjsBIEb4I-o33Ud9qhskh", output=checkpoint_path, quiet=False)
+                gdown.download(id="1It9-xtQFPtO11D7LREN-E4xj_LyrEojy", output=checkpoint_path, quiet=False)
             weights = torch.load(checkpoint_path, map_location='cpu')
             self.load_state_dict(weights)
 
